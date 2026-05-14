@@ -31,7 +31,7 @@ jobs:
     - name: Setup Flutter
       uses: subosito/flutter-action@v2
       with:
-        flutter-version: '3.19.0'
+        flutter-version: '3.24.0'  # ← CHANGE THIS LINE (was '3.19.0')
         channel: 'stable'
     
     - name: Get dependencies
@@ -54,11 +54,3 @@ jobs:
       with:
         name: aab-release
         path: build/app/outputs/bundle/release/app-release.aab
-
-    # Optional: Upload to AppFactory API if reachable
-    # - name: Upload to AppFactory
-    #   run: |
-    #     curl -X POST "${{ github.event.inputs.callback_url }}" \
-    #       -F "build_id=${{ github.event.inputs.build_id }}" \
-    #       -F "type=apk" \
-    #       -F "file=@build/app/outputs/flutter-apk/app-release.apk" || true
