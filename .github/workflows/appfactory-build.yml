@@ -62,6 +62,12 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Fix Dart SDK constraint in pubspec.yaml
+        run: |
+          sed -i 's/sdk: \^3\.10\.0/sdk: ^3.0.0/' pubspec.yaml || true
+          echo "Dart SDK constraint patched to ^3.0.0"
+          head -10 pubspec.yaml
+
       - name: Install dependencies
         run: flutter pub get
 
