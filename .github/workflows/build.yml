@@ -1,56 +1,176 @@
-name: Build Flutter APK
+name: AppFactory Build
 
 on:
   workflow_dispatch:
     inputs:
       build_id:
-        description: 'Build ID from AppFactory'
+        description: 'AppFactory Build ID'
         required: true
+        type: string
+      app_type:
+        description: 'App type (user/store/driver)'
+        required: false
+        default: 'user'
         type: string
       package_name:
         description: 'Android Package Name'
         required: true
         type: string
       app_name:
-        description: 'App Name'
+        description: 'App Display Name'
         required: true
         type: string
+      base_url:
+        description: 'Backend Base URL'
+        required: false
+        default: ''
+        type: string
+      primary_color:
+        description: 'Primary Color hex (no #)'
+        required: false
+        default: ''
+        type: string
+      version_name:
+        description: 'Version name (e.g. 1.0.0)'
+        required: false
+        default: '1.0.0'
+        type: string
       callback_url:
-        description: 'Callback URL to update build status'
+        description: 'AppFactory callback URL'
         required: true
         type: string
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 45
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Setup Flutter
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: '3.41.0'  # ← MATCH YOUR LAPTOP
-        channel: 'stable'
-    
-    - name: Get dependencies
-      run: flutter pub get
-    
-    - name: Build APK
-      run: flutter build apk --release
-    
-    - name: Build AAB
-      run: flutter build appbundle --release
-    
-    - name: Upload APK Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: apk-release
-        path: build/app/outputs/flutter-apk/app-release.apk
-    
-    - name: Upload AAB Artifact  
-      uses: actions/upload-artifact@v4
-      with:
-        name: aab-release
-        path: build/app/outputs/bundle/release/app-release.aab
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Apply package name
+        if: ${{ github.event.inputs.package_name != '' }}
+        run: |
+          PKG="${{ github.event.inputs.package_name }}"
+          # build.gradle / build.gradle.kts — applicationId
+          find android -name "build.gradle" -o -name "build.gradle.kts" | while read f; do
+            sed -i "s|applicationId = \"[^\"]*\"|applicationId = \"${PKG}\"|g" "$f" || true
+            sed -i "s|applicationId \"[^\"]*\"|applicationId \"${PKG}\"|g" "$f" || true
+          done
+          # build.gradle.kts — namespace
+          find android -name "build.gradle.kts" | while read f; do
+            sed -i "s|namespace = \"[^\"]*\"|namespace = \"${PKG}\"|g" "$f" || true
+          done
+          # AndroidManifest.xml
+          find android -name "AndroidManifest.xml" | while read f; do
+            sed -i "s|package=\"[^\"]*\"|package=\"${PKG}\"|g" "$f" || true
+          done
+          echo "Package name applied: ${PKG}"
+
+      - name: Apply app name
+        if: ${{ github.event.inputs.app_name != '' }}
+        run: |
+          NAME="${{ github.event.inputs.app_name }}"
+          # strings.xml
+          find android -name "strings.xml" | while read f; do
+            sed -i "s|<string name=\"app_name\">[^<]*</string>|<string name=\"app_name\">${NAME}</string>|g" "$f" || true
+          done
+          # app_constants.dart — static const String appName = 'xxx';
+          find lib -name "app_constants.dart" | while read f; do
+            sed -i "s|static const String appName = '[^']*'|static const String appName = '${NAME}'|g" "$f" || true
+          done
+          echo "App name applied: ${NAME}"
+
+      - name: Apply base URL
+        if: ${{ github.event.inputs.base_url != '' }}
+        run: |
+          URL="${{ github.event.inputs.base_url }}"
+          # app_constants.dart — static const String baseUrl = 'https://...';
+          find lib -name "app_constants.dart" | while read f; do
+            sed -i "s|static const String baseUrl = '[^']*'|static const String baseUrl = '${URL}'|g" "$f" || true
+          done
+          # Also update any webHostedUrl / domain if present
+          echo "Base URL applied: ${URL}"
+
+      - name: Apply primary color
+        if: ${{ github.event.inputs.primary_color != '' }}
+        run: |
+          COLOR="${{ github.event.inputs.primary_color }}"
+          COLOR="${COLOR//#/}"   # strip leading # if present
+          # light_theme.dart — ThemeData light({Color color = const Color(0xFF039D55)})
+          find lib -name "light_theme.dart" -o -name "app_theme.dart" | while read f; do
+            sed -i "s|Color(0xFF[0-9A-Fa-f]\{6\})|Color(0xFF${COLOR})|g" "$f" || true
+          done
+          echo "Primary color applied: #${COLOR}"
+
+      - name: Build APK
+        run: |
+          flutter build apk --release \
+            --build-name=${{ github.event.inputs.version_name }} \
+            --build-number=${{ github.run_number }}
+
+      - name: Build AAB
+        run: |
+          flutter build appbundle --release \
+            --build-name=${{ github.event.inputs.version_name }} \
+            --build-number=${{ github.run_number }}
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.app_type }}-apk-${{ github.event.inputs.build_id }}
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 7
+
+      - name: Upload AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.app_type }}-aab-${{ github.event.inputs.build_id }}
+          path: build/app/outputs/bundle/release/app-release.aab
+          retention-days: 7
+
+      - name: Notify AppFactory — APK ready
+        if: success()
+        run: |
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
+            -H "Content-Type: multipart/form-data" \
+            -F "build_id=${{ github.event.inputs.build_id }}" \
+            -F "app_type=${{ github.event.inputs.app_type }}" \
+            -F "artifact_type=apk" \
+            -F "file=@build/app/outputs/flutter-apk/app-release.apk" || true
+
+      - name: Notify AppFactory — AAB ready
+        if: success()
+        run: |
+          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
+            -H "Content-Type: multipart/form-data" \
+            -F "build_id=${{ github.event.inputs.build_id }}" \
+            -F "app_type=${{ github.event.inputs.app_type }}" \
+            -F "artifact_type=aab" \
+            -F "file=@build/app/outputs/bundle/release/app-release.aab" || true
+
+      - name: Notify AppFactory — status
+        if: always()
+        run: |
+          STATUS="complete"
+          if [ "${{ job.status }}" != "success" ]; then STATUS="failed"; fi
+          curl -s -X POST "${{ github.event.inputs.callback_url }}/status" \
+            -H "Content-Type: application/json" \
+            -d "{\"build_id\":\"${{ github.event.inputs.build_id }}\",\"status\":\"${STATUS}\",\"app_type\":\"${{ github.event.inputs.app_type }}\"}" || true
